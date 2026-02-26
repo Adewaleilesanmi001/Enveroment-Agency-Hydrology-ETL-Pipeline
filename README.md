@@ -694,7 +694,7 @@ logger.setLevel(logging.DEBUG)
 
 ### Contributors
 
-- **[Your Name](https://github.com/Adewaleilesanmi001)** - Project creator and maintainer
+- **[Adewale](https://github.com/Adewaleilesanmi001)** - Project creator and maintainer
 
 ---
 
