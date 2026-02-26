@@ -7,11 +7,6 @@
   <img src="https://img.shields.io/badge/pytest-0A9EDC?style=for-the-badge&logo=pytest&logoColor=white" alt="Pytest">
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/github/license/yourusername/hydrology-etl?style=flat-square" alt="License">
-  <img src="https://img.shields.io/github/actions/workflow/status/yourusername/hydrology-etl/ci.yml?style=flat-square" alt="Build Status">
-  <img src="https://img.shields.io/badge/version-1.0.0-blue?style=flat-square" alt="Version">
-</p>
 
 <p align="center">
   <b>A production-ready ETL pipeline for extracting, transforming, and loading hydrology data from the UK Environment Agency API into a star-schema SQLite data warehouse.</b>
@@ -32,11 +27,9 @@
 - [Project Structure](#-project-structure)
 - [API Documentation](#-api-documentation)
 - [Testing](#-testing)
-- [Deployment](#-deployment)
 - [Performance](#-performance)
 - [Security](#-security)
 - [Contributing](#-contributing)
-- [Roadmap](#-roadmap)
 - [FAQ](#-faq)
 - [Troubleshooting](#-troubleshooting)
 - [License](#-license)
@@ -64,7 +57,7 @@ This pipeline automates the entire process, providing a reliable, testable, and 
 - 📊 **Data Quality**: Ensures consistent, clean data through validation and transformation
 - 🏗️ **Scalability**: Modular design allows easy extension to additional stations and parameters
 - 🧪 **Testability**: Comprehensive unit tests ensure reliability
-- 📈 **Analytics-Ready**: Star schema design optimized for BI and reporting tools
+- 📈 **Analytics-Ready**: Star schema design for Data Warehouse optimized for BI and any reporting tools
 
 ---
 
@@ -73,11 +66,11 @@ This pipeline automates the entire process, providing a reliable, testable, and 
 ### Core Capabilities
 
 - ✅ **Automated Data Extraction** - Connects to UK Environment Agency Hydrology API
-- ✅ **Smart Filtering** - Extracts only target parameters (Dissolved Oxygen, Conductivity)
+- ✅ **Smart Filtering** - Extracts only target parameters (Dissolved Oxygen, Conductivity) from HIPPER River
 - ✅ **Data Validation** - Validates API connectivity and data integrity
-- ✅ **Star Schema Transformation** - Converts raw data into analytical dimension and fact tables
-- ✅ **SQLite Loading** - Creates optimized database with proper indexing and relationships
-- ✅ **Comprehensive Logging** - Detailed logs for monitoring and debugging
+- ✅ **Star Schema Transformation** - Converts raw data into DataFrame and then analytical dimension and fact tables
+- ✅ **SQLite Loading** - Creates optimized database with proper relationships
+- ✅ **Comprehensive Logging** - Detailed logs for monitoring and debugging code stages or error when running the ETL
 - ✅ **Error Handling** - Graceful handling of API failures and data issues
 - ✅ **Unit Tested** - Full test coverage with mocked API responses
 
@@ -110,11 +103,11 @@ This pipeline automates the entire process, providing a reliable, testable, and 
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │  dim_stations   │     │  fact_readings   │     │  dim_measures   │
 ├─────────────────┤     ├──────────────────┤     ├─────────────────┤
-│ PK station_id   │◄────┤ FK station_id    │     │ PK parameter_id │
-│    station_name │     │ FK parameter_id  │────►│    parameter    │
-│    river_name   │     │    measured_time │     │    unit         │
-│    date_opened  │     │    measured_val  │     │    notation     │
-│    status       │     │    quality       │     │    measure_url  │
+│ PK station_id   │◄────┤ FK station_id    │  |─►│ PK parameter_id │
+│    station_name │     │ FK parameter_id  │──|  │ parameter       │
+│    river_name   │     │measured_timestamp│     │ unit            │
+│    date_opened  │     │measured_value    │     │ measure_notation│
+│    status       │     │measured_quality  │     │ measure_url     │
 │    station_url  │     │    fact_id (PK)  │     └─────────────────┘
 └─────────────────┘     └──────────────────┘
 ```
@@ -231,23 +224,20 @@ python -c "import pandas, requests; print('✅ All dependencies installed succes
 
 ### Environment Variables
 
-Create a `.env` file in the project root (optional):
+Create a `.env` file in the project root:
 
 ```env
 # API Configuration
 HYDROLOGY_API_URL=https://environment.data.gov.uk/hydrology/id/stations/E64999A.json
-API_TIMEOUT=30
+
 
 # Data Filtering
 TARGET_PARAMETERS=DISSOLVED OXYGEN,CONDUCTIVITY
-READING_LIMIT=10
+
 
 # Database
 DB_PATH=hydrology.db
 
-# Logging
-LOG_LEVEL=INFO
-LOG_FILE=app.log
 ```
 
 ### Configuration in Code
@@ -256,14 +246,15 @@ Edit these variables in the respective modules:
 
 **extract.py**:
 ```python
-BASE_URL = "https://environment.data.gov.uk/hydrology/id/stations/E64999A.json"
-TARGET_PARAMETERS = ["DISSOLVED OXYGEN", "CONDUCTIVITY"]
+
+BASE_URL = os.getenv('BASE_URL') 
+TARGET_PARAMETERS = os.getenv('TARGET_PARAMETERS') 
 FILTER_PARAMS = {"_limit": 10, "_sort": "-dateTime"}
 ```
 
 **load.py**:
 ```python
-DB_PATH = "hydrology.db"
+DB_PATH = os.getenv('DB_PATH') 
 ```
 
 ---
@@ -320,6 +311,15 @@ import pandas as pd
 load_to_sqlite(dim_station_df, dim_measure_df, fact_df, db_path="custom.db")
 ```
 
+### Output Files
+After running the pipeline, you'll find:
+
+| File           | Description                             |
+| -------------- | --------------------------------------- |
+| `hydrology.db` | SQLite database with star schema tables |
+| `app.log`      | Detailed execution logs with timestamps |
+
+
 ### Querying the Database
 
 ```bash
@@ -361,7 +361,7 @@ hydrology-etl/
 │   ├── load.py              # Database loading
 │   ├── logger_setup.py      # Logging configuration
 │   └── run_etl.py           # Pipeline orchestrator
-│
+│   └── .env                 # API Secrete file
 ├── 🧪 Tests
 │   ├── test_extract.py      # Unit tests for extraction
 │   ├── test_transform.py    # Unit tests for transformation
@@ -371,8 +371,7 @@ hydrology-etl/
 │   ├── hydrology.db         # Generated SQLite database
 │   └── app.log              # Execution logs
 │
-└── 📁 docs/                 # Additional documentation
-    └── images/              # Screenshots and diagrams
+
 ```
 
 ### File Descriptions
@@ -404,8 +403,8 @@ hydrology-etl/
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `_limit` | Integer | Maximum number of readings to return |
-| `_sort` | String | Sort order (e.g., `-dateTime` for descending) |
+| `_limit` | Integer | Maximum number of readings to return  used 10|
+| `_sort` | String | Sort order (Used `-dateTime` for descending) |
 
 #### Response Format
 
@@ -485,36 +484,6 @@ def test_feature():
 
 ---
 
-## 🚢 Deployment
-
-### Local Deployment
-
-```bash
-# 1. Set up cron job for scheduled execution
-crontab -e
-
-# 2. Add entry for hourly execution
-0 * * * * cd /path/to/hydrology-etl && /path/to/venv/bin/python run_etl.py >> cron.log 2>&1
-```
-
-### Docker Deployment (Optional)
-
-```dockerfile
-FROM python:3.11-slim
-
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-
-COPY . .
-CMD ["python", "run_etl.py"]
-```
-
-```bash
-# Build and run
-docker build -t hydrology-etl .
-docker run -v $(pwd)/data:/app hydrology-etl
-```
 
 ### Production Considerations
 
@@ -556,7 +525,7 @@ docker run -v $(pwd)/data:/app hydrology-etl
 
 ### Data Security
 
-- ✅ No sensitive credentials in code
+- ✅ No sensitive credentials in code used .env
 - ✅ API calls use HTTPS
 - ✅ Input validation on all external data
 - ✅ SQL injection prevention via parameterized queries
@@ -575,16 +544,15 @@ df.to_sql('table', conn, if_exists='append', index=False)
 
 ### API Rate Limiting
 
-The UK Hydrology API has rate limits. The pipeline includes:
+The pipeline includes:
 - Timeout configuration (30 seconds)
 - Connection error handling
-- Retry logic can be added for production use
 
 ---
 
 ## 🤝 Contributing
 
-We welcome contributions! Please follow these guidelines:
+I welcome contributions! Please follow these guidelines:
 
 ### Getting Started
 
@@ -619,27 +587,6 @@ Use GitHub Issues to report bugs or request features:
 
 ---
 
-## 🗺️ Roadmap
-
-### Version 1.1 (Planned)
-- [ ] Support for multiple stations
-- [ ] Configurable parameter filtering via config file
-- [ ] Incremental loading (only new data)
-- [ ] Data validation rules
-
-### Version 1.2 (Planned)
-- [ ] PostgreSQL support
-- [ ] Docker containerization
-- [ ] CI/CD pipeline
-- [ ] Performance metrics dashboard
-
-### Version 2.0 (Future)
-- [ ] Real-time streaming support
-- [ ] REST API for data access
-- [ ] Web-based monitoring dashboard
-- [ ] Machine learning anomaly detection
-
----
 
 ## ❓ FAQ
 
@@ -725,31 +672,10 @@ logger.setLevel(logging.DEBUG)
 
 ### Getting Help
 
-- 📧 Email: your.email@example.com
-- 🐛 Issues: [GitHub Issues](https://github.com/yourusername/hydrology-etl/issues)
-- 💬 Discussions: [GitHub Discussions](https://github.com/yourusername/hydrology-etl/discussions)
+- 📧 Email: adewale.ilesanmi001@gmail.com
+- 💬 Discussions: [GitHub Discussions](https://github.com/Adewaleilesanmi001/Enveroment-Agency-Hydrology-ETL-Pipeline/discussions)
 
 ---
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-```
-MIT License
-
-Copyright (c) 2024 [Your Name]
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-```
 
 ---
 
@@ -768,7 +694,7 @@ copies or substantial portions of the Software.
 
 ### Contributors
 
-- **[Your Name](https://github.com/yourusername)** - Project creator and maintainer
+- **[Your Name](https://github.com/Adewaleilesanmi001)** - Project creator and maintainer
 
 ---
 
@@ -777,9 +703,8 @@ copies or substantial portions of the Software.
 </p>
 
 <p align="center">
-  <a href="https://github.com/yourusername/hydrology-etl">GitHub</a> •
-  <a href="https://github.com/yourusername/hydrology-etl/issues">Issues</a> •
-  <a href="https://github.com/yourusername/hydrology-etl/discussions">Discussions</a>
+  <a href="https://github.com/Adewaleilesanmi001/Enveroment-Agency-Hydrology-ETL-Pipeline">GitHub</a> •
+  <a href="https://github.com/Adewaleilesanmi001/Enveroment-Agency-Hydrology-ETL-Pipeline/discussions">Discussions</a>
 </p>
 
 ---
