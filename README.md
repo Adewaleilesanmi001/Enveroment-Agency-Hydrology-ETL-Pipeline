@@ -673,6 +673,7 @@ logger.setLevel(logging.DEBUG)
 ### Getting Help
 
 - 📧 Email: adewale.ilesanmi001@gmail.com
+- 🐛 Issues: [GitHub Issues](https://github.com/Adewaleilesanmi001/Enveroment-Agency-Hydrology-ETL-Pipeline/issues)
 - 💬 Discussions: [GitHub Discussions](https://github.com/Adewaleilesanmi001/Enveroment-Agency-Hydrology-ETL-Pipeline/discussions)
 
 ---
@@ -703,7 +704,8 @@ logger.setLevel(logging.DEBUG)
 </p>
 
 <p align="center">
-  <a href="https://github.com/Adewaleilesanmi001/Enveroment-Agency-Hydrology-ETL-Pipeline">GitHub</a> •
+  <a href="https://github.com/Adewaleilesanmi001/Enveroment-Agency-Hydrology-ETL-Pipeline">GitHub</a>  •
+  <a href="https://github.com/Adewaleilesanmi001/Enveroment-Agency-Hydrology-ETL-Pipeline/issues">Issues</a> •
   <a href="https://github.com/Adewaleilesanmi001/Enveroment-Agency-Hydrology-ETL-Pipeline/discussions">Discussions</a>
 </p>
 
