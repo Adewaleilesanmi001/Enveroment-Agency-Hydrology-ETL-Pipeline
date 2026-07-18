@@ -19,4 +19,4 @@ jobs:
       - name: Install dependencies
         run: pip install pyspark==3.5.1 pytest
       - name: Run tests
-        run: pytest tests/ -v
+        run: python -m pytest tests/ -v
