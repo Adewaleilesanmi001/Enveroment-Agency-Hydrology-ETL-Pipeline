@@ -54,10 +54,15 @@ def validate(df: DataFrame) -> tuple[DataFrame, DataFrame]:
 
 
 def deduplicate(df: DataFrame) -> DataFrame:
-    """One row per (station_id, date_time); keep the latest-seen value."""
-    w = Window.partitionBy("station_id", "date_time").orderBy(
-        F.col("value").isNull().asc()  # prefer non-null values
-    )
+    """One row per (station_id, date_time), preferring the most recently
+    ingested row so revised readings supersede their originals, then
+    preferring rows that carry a value."""
+    order_cols = []
+    if "ingest_date" in df.columns:
+        order_cols.append(F.col("ingest_date").desc())
+    order_cols.append(F.col("value").isNull().asc())
+
+    w = Window.partitionBy("station_id", "date_time").orderBy(*order_cols)
     return (
         df.withColumn("_rn", F.row_number().over(w))
         .filter(F.col("_rn") == 1)
