@@ -151,3 +151,20 @@ def test_enforce_schema_adds_null_quality_when_absent(spark):
     out = enforce_schema(df)
     assert "quality" in out.columns
     assert out.collect()[0]["quality"] is None
+
+
+
+def test_deduplicate_prefers_latest_ingest(spark):
+    """A revised reading (later ingest) must supersede the original."""
+    rows = [
+        ("s1", "m1", ts(0), 1.0, "2026-07-19"),   # original
+        ("s1", "m1", ts(0), 2.0, "2026-07-20"),   # revised, later load
+    ]
+    df = spark.createDataFrame(
+        rows,
+        "station_id string, measure_id string, date_time timestamp, "
+        "value double, ingest_date string",
+    )
+    out = deduplicate(df).collect()
+    assert len(out) == 1
+    assert out[0]["value"] == 2.0
