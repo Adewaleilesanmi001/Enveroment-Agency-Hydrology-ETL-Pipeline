@@ -1,92 +1,94 @@
-# Hydrology Pipeline v2 — Azure End-to-End Rebuild
-### Weekend build plan (Fri eve → Sun) with Tuesday interview as the deadline
+# Build Record & Rebuild Guide
 
-**The rule for this weekend:** everything you build, you can defend. Every step below ends with a "you can now say" line — that sentence is what the build buys you in the interview.
+This document records how the pipeline was built, in what order, and why — detailed
+enough that anyone (including future me) could rebuild it from an empty Azure
+subscription. The original weekend plan became this record as the build completed.
 
-**Cost guardrails (read first):**
-- Databricks: use the **14-day Azure Databricks trial** (free DBUs; you still pay the VM). Create a **single-node cluster**, smallest VM available (e.g. Standard_F4 / DS3 v2), **auto-terminate at 10 minutes**. Never leave it running.
-- ADF: debug runs and a handful of triggered runs cost pennies.
-- ADLS: gigabytes of parquet = pennies.
-- Expected total for the weekend: **under £10** if the cluster auto-terminates. Set a **£20 budget alert** on the subscription (Cost Management → Budgets) before anything else.
+## Phase 0 — Study the source first
 
----
+Before any infrastructure: profile the API in a browser. This phase produced the four
+discoveries that shaped the entire architecture (see root README, "The source drove
+the design"). Key endpoints:
 
-## Friday evening (60–90 min) — Foundations
+- Stations: `https://environment.data.gov.uk/hydrology/id/stations.json?search=<name>`
+- Readings: `.../id/measures/{measureId}/readings.json?mineq-date=YYYY-MM-DD&_limit=N`
 
-1. **Resource group:** `rg-hydrology-prod` in UK South.
-2. **Storage:** ADLS Gen2 account (hierarchical namespace ON), containers: `bronze`, `silver`, `gold`, `meta`.
-3. **Databricks workspace** (trial tier) + **Data Factory** instance in the same resource group.
-4. **Explore the API in the browser** — refresh your memory of the real thing:
-   - Base: `https://environment.data.gov.uk/hydrology/`
-   - Stations: `/id/stations?observedProperty=waterLevel&_limit=50`
-   - Readings: `/id/measures/{measureId}/readings?mineq-date=2026-07-01&_limit=500`
-   - Confirm for yourself: 15-minute cadence → **96 readings/station/day**. Note pagination (`_limit`, `_offset`) and date filters (`mineq-date`, `max-date`) — these power your incremental load.
-5. **GitHub:** create repo `hydrology-pipeline-v2` (or a `v2/` branch of the existing repo), push this scaffold, confirm CI goes green on the included tests.
+Reference station: **Bywell** (River Tyne), measure
+`e786e60f-a0f1-4955-aa57-f22ba39c7427-level-i-900-m-qualified` — decode the suffix:
+level, instantaneous, 900s period (15 min ⇒ 96/day), metres, qualified series.
+Upstream context stations: Reaverhill (North Tyne), Haydon Bridge (South Tyne).
 
-**You can now say:** "The API filters readings by date, which is what makes incremental loading possible — each run only requests data since the last watermark."
+**Lesson of the phase:** every hour spent profiling saved a design mistake. The
+publication cadence, the revision lifecycle, the flow lag and the hyphenated GUIDs
+were all found here, before a line of infrastructure existed.
 
----
+## Phase 1 — Foundations (≈90 min)
 
-## Saturday — Ingestion + Bronze (the ADF day)
+| Step | Detail | Why |
+|---|---|---|
+| Resource group | `rg-hydrology-prod`, UK South | one folder for everything |
+| **Budget alert first** | £20/month, email at 80% | cost seatbelt before anything billable |
+| Storage account | Standard, LRS, **hierarchical namespace ON** | HNS is what makes it ADLS Gen2 |
+| Containers | `bronze`, `silver`, `gold`, `meta` | medallion + control files |
+| Watermark seed | `meta/watermark.json` = `{"last_loaded": "<start>"}` | the pipeline's memory |
+| Data Factory | V2, Git configured later | orchestration |
+| Repo | scaffold pushed, CI green before proceeding | quality gate exists from day one |
 
-### Morning: watermark + ingestion design
-1. In `meta` container create `watermark.json`: `{"last_loaded": "2026-07-10T00:00:00Z"}` (start ~a week back so first runs are small).
-2. ADF pipeline `pl_ingest_hydrology`:
-   - **Lookup** activity → reads `watermark.json`.
-   - **Copy** activity → REST **linked service** to the Hydrology API; relative URL built with `@concat(...)` injecting the watermark into `mineq-date`; sink = `bronze` container as **Parquet**, path `bronze/readings/ingest_date=YYYY-MM-DD/`.
-   - **Copy/Web** activity → writes the new watermark (pipeline start time) back to `meta/watermark.json` **only on success**.
-3. Pick **3–5 stations** to keep volume sane; parameterise station/measure IDs so scaling to hundreds is "add config, not code" (interview line!).
+Account note: a free Azure account was **upgraded to pay-as-you-go** (credit is
+retained) because free-trial subscriptions carry near-zero compute quotas with no
+increase path.
 
-### Afternoon: run + schedule
-4. Debug-run until parquet lands in bronze. Inspect a file (ADF preview or Databricks).
-5. **Scheduled trigger:** daily **00:00 UK**. This resolves the Airflow/ADF question permanently: **the answer is ADF scheduled triggers.**
-6. Add a **failure alert**: Azure Monitor alert rule on pipeline-failed metric → email.
+## Phase 2 — Ingestion (ADF)
 
-**You can now say:** "ADF reads a watermark from the lake, calls the API for readings since that timestamp, lands them as parquet in bronze partitioned by ingest date, and only advances the watermark on success — so a failed run just re-runs, nothing is skipped or duplicated."
+Built: two linked services, three datasets, the `pl_ingest_hydrology` pipeline
+(Lookup → Copy), daily 00:00 trigger, failure alert. Full object-level documentation
+lives in `adf/README.md`.
 
----
+Incidents worth remembering (details in root README, "Incidents & lessons"):
+the misfiled expression in the compression field; the green run that wrote 1 row
+from 347 KB; the architectural switch to raw-JSON bronze. **Verification standard
+set here: check bytes and rows, never trust status colour alone.**
 
-## Sunday — Silver + Gold (the Databricks day)
+## Phase 3 — Transformation (Databricks)
 
-### Morning: silver notebook `nb_bronze_to_silver`
-1. Read new bronze parquet.
-2. Enforce schema: explicit types for `station_id`, `measure_id`, `dateTime` (timestamp), `value` (double).
-3. Validate: drop/quarantine null keys and impossible values; count what you quarantine.
-4. **Deduplicate** on `station_id + dateTime`.
-5. **MERGE INTO** Delta table `silver.readings` matching on `station_id` AND `dateTime`: matched → update, not matched → insert. **Run the pipeline twice and prove row counts don't change — screenshot it.** That screenshot is your idempotency proof.
-6. **Interpolation:** for gaps ≤ 4 intervals (1 hour), linear interpolation via Spark window functions; longer gaps left null and **flagged** in an `is_imputed` / `gap_length` column. (This is more defensible than v1: you now impute only short gaps and mark everything imputed.)
+- Classic VM clusters were blocked by subscription quota → **serverless compute**
+  (better outcome: instant start, per-second billing, no cluster management).
+- Serverless refused account-key storage access → **Unity Catalog**: one storage
+  credential (workspace managed identity, granted Storage Blob Data Contributor on
+  the account) + one external location per container. Result: **no keys in code**.
+- Notebooks (documented in `notebooks/README.md`) run the chain:
+  explode → station key → schema → quarantine → dedup → interpolate → **MERGE** →
+  flat-line check → gold → watermark advance.
+- Repo synced via a Git folder (PAT with `repo` scope); notebooks commit through
+  branch → PR → CI → merge, same as any code.
 
-### Afternoon: gold + wiring + quality
-7. Gold notebook `nb_silver_to_gold`: daily aggregates per station (min/max/mean level, reading count, completeness % = count/96), written as Delta to `gold`.
-8. **Flat-line detector** (your war story, productionised): a check that flags any station whose value variance over a rolling 6-hour window is zero → writes to a `quality_alerts` Delta table. *The v1 incident is now a v2 feature — gold interview material.*
-9. Wire ADF: after the Copy activity, a **Databricks Notebook activity** runs silver, then gold. One pipeline, end to end.
-10. Full run: trigger manually → API → bronze → silver → gold. Verify counts (~96/station/day).
-11. Sync notebook code into the repo (Databricks Repos or export), push, CI green.
+Verification milestones achieved in this phase: dedup collapse **5,314 → 4,371**,
+idempotency **4,371 = 4,371** across a double merge, flat-line detector's first live
+findings (**30 alerts = 3 episodes**), gold completeness matching the observed
+per-day profile.
 
-**You can now say:** "Re-runs are idempotent — I've verified it: same-day double runs produce identical silver counts because loads are Delta merges on station and timestamp, not appends. And after an incident where a source flat-lined for six hours without tripping volume alerts, v2 monitors value variance, not just row counts."
+## Phase 4 — Corrections found by testing the design forward
 
----
+1. **Lookback added** to the ingestion URL (`addDays(watermark, -35)`) after
+   realising a forward-only watermark would permanently miss the EA's revisions.
+2. **Watermark made data-derived** (max stored timestamp, written only after
+   success) — a clock-based mark claims knowledge it doesn't have.
+3. **Dedup ordering fixed** to prefer latest ingest (revisions supersede originals),
+   with a test reproducing a revision — found because the docstring promised
+   behaviour the code didn't implement.
+4. **Partition date passed as a parameter** from orchestrator to notebook after the
+   timezone mismatch (local-time trigger vs UTC-stamped folder). The quick fix
+   (shift the schedule) was rejected because it silently breaks at the October
+   clock change.
 
-## Monday — Freeze + drill (NO new features)
+## Costs
 
-- Morning: update README with an architecture diagram (Mermaid is fine) and the design decisions.
-- Rotate the OpenWeather key on the old repo if still pending.
-- Evening: **full technical mock with Claude.** You'll answer every question from something you built 24 hours earlier.
+Entire build: **under £10** (mostly absorbed by trial credit). Guardrails: budget
+alert, serverless per-second billing, storage in pennies, $0.10/month for the alert
+rule.
 
-## After Tuesday — Phase 2 hardening backlog
-- Great-Expectations-style data tests in the pipeline; schema-drift alerts
-- Key Vault for secrets; managed identity between ADF/Databricks/ADLS
-- CI deploy of notebooks; ADF ARM template export into the repo (`adf/` folder)
-- Scale-out: config-driven station list to 50+ stations
-- Cost dashboard + SLA doc — then this repo headlines every application
+## Rebuild-from-zero checklist
 
----
-
-## Scaffold contents (this folder)
-- `src/transforms.py` — pure PySpark transformation functions (dedup, schema, interpolation, flat-line detection) importable by notebooks AND testable in CI
-- `tests/test_transforms.py` — pytest suite proving dedup, idempotent merge keys, interpolation limits, flat-line detection
-- `.github/workflows/ci.yml` — runs the suite on every push
-- `notebooks/` — outlines for the two Databricks notebooks (fill in during Sunday)
-- `adf/README.md` — checklist for exporting your ADF pipeline JSON into the repo
-
-Push this today, get CI green, then start Friday-evening steps.
+Foundations table above → push repo, CI green → ADF per `adf/README.md` → Unity
+Catalog credential + 4 external locations → notebooks per `notebooks/README.md` →
+trigger + alert → verify with the four milestones in Phase 3.
